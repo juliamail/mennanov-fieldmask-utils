@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	fieldmask_utils "github.com/mennanov/fieldmask-utils"
 )
@@ -2283,6 +2284,7 @@ func TestStructToStruct_WithConverterHook(t *testing.T) {
 		Field2 []*E
 		Field3 []*E
 		Field4 []string
+		Field5 *timestamppb.Timestamp
 	}
 	src := &A{
 		Field1: "   42   ",
@@ -2291,15 +2293,20 @@ func TestStructToStruct_WithConverterHook(t *testing.T) {
 			{Field1: "foo"},
 		},
 		Field4: []string{"   3.141   ", "-273.15"},
+		Field5: &timestamppb.Timestamp{
+			Seconds: 1780396738,
+			Nanos:   42,
+		},
 	}
 	type B struct {
 		Field1 int64
 		Field2 []*F
 		Field3 []*F
 		Field4 []float64
+		Field5 time.Time
 	}
 	dst := &B{}
-	mask := fieldmask_utils.MaskFromString("Field1,Field2,Field3,Field4")
+	mask := fieldmask_utils.MaskFromString("Field1,Field2,Field3,Field4,Field5")
 
 	// test original error due to no conversion
 	err := fieldmask_utils.StructToStruct(mask, src, dst)
@@ -2354,6 +2361,22 @@ func TestStructToStruct_WithConverterHook(t *testing.T) {
 			}
 
 			return strconv.ParseFloat(strings.TrimSpace(raw), 64)
+		}),
+		// convert *timestamppb.Timestamp to time.Time
+		fieldmask_utils.WithConverterHook(func(src, dst *reflect.Value) (interface{}, error) {
+			data := src.Interface()
+
+			if src.Kind() != reflect.TypeFor[*timestamppb.Timestamp]().Kind() ||
+				dst.Kind() != reflect.TypeFor[time.Time]().Kind() {
+				return data, nil
+			}
+
+			raw, ok := data.(*timestamppb.Timestamp)
+			if !ok {
+				return data, nil
+			}
+
+			return raw.AsTime(), nil
 		}))
 	require.NoError(t, err)
 	assert.Equal(t, &B{
@@ -2363,5 +2386,25 @@ func TestStructToStruct_WithConverterHook(t *testing.T) {
 			{Field1: "foo"},
 		},
 		Field4: []float64{3.141, -273.15},
+		Field5: time.Unix(1780396738, 42).UTC(),
 	}, dst)
+}
+
+func TestStructToStruct_ValueToPtr_WithUnrelatedHook(t *testing.T) {
+	type A struct{ Field int }
+	type B struct{ Field *int }
+
+	src := &A{Field: 42}
+	dst := &B{}
+	mask := fieldmask_utils.MaskFromString("Field")
+
+	// A no-op hook that does not apply to this field.
+	hook := fieldmask_utils.WithConverterHook(func(s, d *reflect.Value) (any, error) {
+		return s.Interface(), nil
+	})
+
+	err := fieldmask_utils.StructToStruct(mask, src, dst, hook)
+	require.NoError(t, err)
+	require.NotNil(t, dst.Field)
+	require.Equal(t, 42, *dst.Field)
 }

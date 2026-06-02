@@ -51,29 +51,36 @@ func ensureCompatible(src, dst *reflect.Value) error {
 }
 
 func structToStruct(filter FieldFilter, src, dst *reflect.Value, userOptions *options) error {
-	if err := ensureCompatible(src, dst); err != nil {
-		// incompatible, try using converters:
-		converted := false
-		for _, fn := range userOptions.ConverterHooks {
-			data, err := fn(src, dst)
-			if err != nil {
-				// error during conversion, pass upwards
-				return err
-			}
-			rdata := reflect.ValueOf(data)
-			if err := ensureCompatible(&rdata, dst); err != nil {
-				// no change using conversion, try next
-				continue
-			}
-
-			// it is convertable, replace src
-			src = &rdata
-			converted = true
-			break
-		}
-		if !converted {
+	// Apply user conversions as early as possible to allow replacements of src.
+	// This allows users (providing a converter) to assign protobuf message structs
+	// to golang primitive types.
+	for _, fn := range userOptions.ConverterHooks {
+		data, err := fn(src, dst)
+		if err != nil {
+			// error during conversion; pass upwards
 			return err
 		}
+
+		rdata := reflect.ValueOf(data)
+		if !rdata.IsValid() || rdata.Type() == src.Type() {
+			// invalid or converter didn't change the type; keep original (addressable) src
+			continue
+		}
+
+		if err := ensureCompatible(&rdata, dst); err != nil {
+			// no change using conversion; try next
+			continue
+		}
+
+		// it is convertable; replace src
+		src = &rdata
+
+		// keep going as we want to allow converter chaining
+	}
+
+	// final check to ensure types are compatible
+	if err := ensureCompatible(src, dst); err != nil {
+		return err
 	}
 
 	switch src.Kind() {

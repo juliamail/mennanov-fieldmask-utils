@@ -168,6 +168,51 @@ func main() {
 }
 ```
 
+Conversion example from `*timestamppb.Timestamp` to `time.Time`:
+
+```go
+type A struct {
+    Field1 *timestamppb.Timestamp
+}
+type B struct {
+    Field1 time.Time
+}
+
+func main() {
+	src := &A{
+		Field1: &timestamppb.Timestamp{
+			Seconds: 1780396738,
+			Nanos:   42,
+		},
+	}
+	dst := &B{}
+	mask := fieldmask_utils.MaskFromString("Field1")
+
+    err = fieldmask_utils.StructToStruct(mask, src, dst,
+		fieldmask_utils.WithConverterHook(func(src, dst *reflect.Value) (interface{}, error) {
+			data := src.Interface()
+
+            // only care for this conversion
+			if src.Kind() != reflect.TypeFor[*timestamppb.Timestamp]().Kind() ||
+				dst.Kind() != reflect.TypeFor[time.Time]().Kind() {
+				return data, nil
+			}
+
+            // cast it
+			raw, ok := data.(*timestamppb.Timestamp)
+			if !ok {
+				return data, nil
+			}
+
+            // convert it
+			return raw.AsTime(), nil
+		}))
+
+	fmt.Println("src:", src)
+	fmt.Println("dst:", dst)
+}
+```
+
 ### Limitations
 
 1.  Larger scope field masks have no effect and are not considered invalid:
@@ -178,6 +223,9 @@ func main() {
 3.  When copying from a struct to struct the destination struct must have the same fields (or a subset)
     as the source struct. Either of source or destination fields can be a pointer as long as it is a pointer to
     the type of the corresponding field.
+    You can overcome this limitation by providing converter hooks.
+    A common use-case would be to copy fields of different types (including struct to primitive).
+    See the example [Converter hooks](#converter-hooks).
 4. `oneof` fields are represented differently in `fieldmaskpb.FieldMask` compared to `fieldmask_util.Mask`. In
     [FieldMask](https://pkg.go.dev/google.golang.org/protobuf/types/known/fieldmaskpb#:~:text=%23%20Field%20Masks%20and%20Oneof%20Fields)
     the fields are represented using their property name, in this library they are prefixed with the `oneof` name
